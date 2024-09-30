@@ -1,0 +1,4 @@
+library(data.table)
+
+data <- data.table(fread("~/Downloads/taxi_chicago.csv"))
+data$V1
