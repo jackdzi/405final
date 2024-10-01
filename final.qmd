@@ -1,9 +1,8 @@
-
 ---
 title: "Taxicab Project"
 author: "Jack Dzialo, Tayten Bennetsen, Rith _____, Griffin Ball"
-date: ''
-format:
+date: '10/1/24'
+format: pdf
 pdf: default
 html: default
 pdf-engine: pdflatex
@@ -33,19 +32,25 @@ This plot shows price of ride price vs. ride time.
 
 
 ```{r}
-indexes <- sample(1:10000,1000)
+indexes <- sample(1:10000, 1000)
 ride_time <- data$`Trip Seconds`[indexes]
 ride_price <- data$Fare[indexes]
-outliers1 <- which(ride_price <= quantile(ride_price, .97, na.rm=TRUE))
+outliers1 <- which(ride_price <= quantile(ride_price, .97, na.rm = TRUE))
 outliers2 <- which(ride_time <= quantile(ride_time, .97, na.rm=TRUE))
 threshold <- intersect(outliers1, outliers2)
-plot(ride_time[threshold], ride_price[threshold], cex=0.5, xlab='Ride Time (Seconds)', ylab='Ride Fare (Dollars)')
+plot(ride_time[threshold], ride_price[threshold], 
+  cex=0.5,xlab = "Ride Time (Seconds)", ylab = "Ride Fare (Dollars)")
 model <- lm(ride_price[threshold] ~ ride_time[threshold])
-abline(model, col='red')
-estimators <- summary(model)$coefficients[,4]
+abline(model, col = "red")
+estimators <- summary(model)$coefficients[, 4]
 names(estimators) <- NULL
-cat('The P-values for b0hat, b1hat are: ',estimators[1], ', ', estimators[2], ', respectively.\n')
+cat("The P-values for b0hat, b1hat are: ", estimators[1], 
+    ", ", estimators[2], ", respectively.\n")
 ```
 
-Since the p-values of the estimators are so low (at least lower than 0.025), we can reject the null hypothesis at a significance level of a = 0.05.
+Since the p-values of the estimators are so low (at least lower than 0.025), we can reject the null hypothesis at a significance level of a = 0.05. This signifies a strong connection between length of the ride with price of the ride, which makes sense, since most taxis use a meter and charge by the minute. 
+
+## Plot 2 - Box Plot
+
+
 
