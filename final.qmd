@@ -1,4 +1,51 @@
-library(data.table)
 
+---
+title: "Taxicab Project"
+author: "Jack Dzialo, Tayten Bennetsen, Rith _____, Griffin Ball"
+date: ''
+format:
+pdf: default
+html: default
+pdf-engine: pdflatex
+editor: visual
+fontsize: 10pt
+geometry: margin=1in
+toc: false 
+toc-depth: 2 
+---
+
+# Introduction
+
+Our team decided to analyze a dataset with information about taxi rides in Chicago to try and find links between taxi data such as ride time, price, and length with outside information such as weather conditions, different locations and their factors, and amount of traffic. The dataset contains over 5 million rows, and contains information of almost all taxi rides in the Chicago area from January 2024 to the present (October). It contains information such as but limited to: trip start and end times, trip length, fares and tips, company, and payment type.
+
+# Plots
+
+First, let us load in the data.
+
+```{r}
+library(data.table)
 data <- data.table(fread("~/Downloads/taxi_chicago.csv"))
-data$V1
+```
+
+## Plot 1 - Scatterplot
+
+This plot shows price of ride price vs. ride time.
+
+
+```{r}
+indexes <- sample(1:10000,1000)
+ride_time <- data$`Trip Seconds`[indexes]
+ride_price <- data$Fare[indexes]
+outliers1 <- which(ride_price <= quantile(ride_price, .97, na.rm=TRUE))
+outliers2 <- which(ride_time <= quantile(ride_time, .97, na.rm=TRUE))
+threshold <- intersect(outliers1, outliers2)
+plot(ride_time[threshold], ride_price[threshold], cex=0.5, xlab='Ride Time (Seconds)', ylab='Ride Fare (Dollars)')
+model <- lm(ride_price[threshold] ~ ride_time[threshold])
+abline(model, col='red')
+estimators <- summary(model)$coefficients[,4]
+names(estimators) <- NULL
+cat('The P-values for b0hat, b1hat are: ',estimators[1], ', ', estimators[2], ', respectively.\n')
+```
+
+Since the p-values of the estimators are so low (at least lower than 0.025), we can reject the null hypothesis at a significance level of a = 0.05.
+
