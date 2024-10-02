@@ -30,7 +30,6 @@ data <- data.table(fread("~/Downloads/taxi_chicago.csv"))
 
 This plot shows price of ride price vs. ride time.
 
-
 ```{r}
 indexes <- sample(1:10000, 1000)
 ride_time <- data$`Trip Seconds`[indexes]
@@ -48,9 +47,93 @@ cat("The P-values for b0hat, b1hat are: ", estimators[1],
     ", ", estimators[2], ", respectively.\n")
 ```
 
-Since the p-values of the estimators are so low (at least lower than 0.025), we can reject the null hypothesis at a significance level of a = 0.05. This signifies a strong connection between length of the ride with price of the ride, which makes sense, since most taxis use a meter and charge by the minute. 
+Since the p-values of the estimators are so low (at least lower than 0.025), we can reject the null hypothesis at a significance level of a = 0.05. This signifies a strong connection between length of the ride with price of the ride, which makes sense, since most taxis use a meter and charge by the minute.
 
 ## Plot 2 - Box Plot
 
+## 
+
+## Plot 3 - Top 20 Taxi Companies
+
+#### Bar Plot
+
+This plot is a bar plot that shows us the top 20 taxi companies in Chicago.
+
+```{r}
+company <- (taxi_data[, .(Company)])
+company_counts <- (company[, .N, by = Company])
+ordered <- company_counts[order(-N)]
+top20 <- head(ordered, 20)
+names <- top20$Company
+counts <- top20$N
+par(mar = c(10, 4, 4, 2) + 0.1, tck = -0.01, xaxs = 'i', yaxs = 'i')
+options(scipen = 999)
+barplot(counts, 
+        names.arg = names, 
+        main = "Top 20 Taxi Companies", 
+        ylab = "Number of Rides in 2024", 
+        col = 'blue',
+        las = 2,               
+        cex.names = 0.7, 
+        cex.axis = 0.7,
+        ) 
+abline(h = seq(0, max(counts), by = 200000), col = "grey80", lty = "dotted")
+```
+
+The plot shows that Flash Cab is the most popular cab service in Chicago with almost 1 million rides so far in 2024. Taxi Affiliation Services comes in second with about 750,000 rides this year and then Sun Taxi, and Taxicab Insurance Agency Llc are racing for the third position of number of taxi rides. We can also see the rest of the top 20 that have less and less uses.
+
+## Plot 3 - Distance vs Tip Percentage
+
+#### Line Plot
+
+This plot is a line plot that shows the distance traveled by taxi vs the percentage that they get tipped.
+
+```{r}
+indexes <- sample(1:100000, 100000)
+miles <- taxi_data$`Trip Miles`[indexes]
+fare <- taxi_data$Fare[indexes]
+tip <- taxi_data$Tips[indexes]
+tipperc <- (tip / fare) * 100
+df <- data.frame(miles, tipperc)
+bin_width <- 0.5
+bins <- cut(
+  df$miles,
+  breaks = seq(floor(min(df$miles, na.rm = TRUE)),ceiling(max(df$miles, na.rm = TRUE)),by = bin_width),
+  include.lowest = TRUE,
+  right = FALSE
+)
+
+tipbin <- tapply(df$tipperc, bins, mean, na.rm = TRUE)
+bin_levels <- levels(bins)
+
+centers <- sapply(strsplit(gsub("\\[|\\)|\\]", "", bin_levels), ","), function(x) {
+  lower_bound <- as.numeric(x[1])
+  lower_bound + (bin_width / 2)
+})
+valid_bins <- !is.na(tipbin)
+
+centers <- centers[valid_bins]
+tipbin <- tipbin[valid_bins]
 
 
+sorted_indices <- order(centers)
+centers_sorted <- centers[sorted_indices]
+tipbin_sorted <- tipbin[sorted_indices]
+
+plot(
+  centers_sorted,
+  tipbin_sorted,
+  type = "l",  
+  main = "Distance vs Tip Percentage",
+  xlab = "Distance (Miles)",
+  ylab = "Tip Percentage (%)",
+  lwd = 2,
+  col = "blue3",
+  ylim = c(0, 25),
+  xlim = c(0, 30)
+)
+grid()
+points(centers_sorted, tipbin_sorted, pch = 19, col = "blue3")
+```
+
+This plot shows a very interesting dynamic between distance traveled and tip percentage. As you can see there is a sharp decline in percentage from 0 to 10 miles, and then a sharp increase from 11 to 15 miles and then a steady decline from there. We thought this was very interesting and hypothesized that this was due to the way that people tip. We believe that or shorter rides(0-10mi) people give a set tip not based on the fare, but on longer rides, tip is calculated by the fare.
