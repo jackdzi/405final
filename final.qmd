@@ -26,7 +26,9 @@ library(data.table)
 data <- data.table(fread("~/Downloads/taxi_chicago.csv"))
 ```
 
-## Plot 1 - Scatterplot
+## Plot 1 - Ride Price vs Ride Time
+
+#### Scatterplot
 
 This plot shows price of ride price vs. ride time.
 
