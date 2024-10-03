@@ -1,6 +1,6 @@
 ---
 title: "Taxicab Project"
-author: "Jack Dzialo, Tayten Bennetsen, Rith _____, Griffin Ball"
+author: "Jack Dzialo, Tayten Bennetsen, Rith Katikaneni, Griffin Ball"
 date: '10/1/24'
 format: pdf
 pdf: default
@@ -49,20 +49,16 @@ cat("The P-values for b0hat, b1hat are: ", estimators[1],
     ", ", estimators[2], ", respectively.\n")
 ```
 
-Since the p-values of the estimators are so low (at least lower than 0.025), we can reject the null hypothesis at a significance level of a = 0.05. This signifies a strong connection between length of the ride with price of the ride, which makes sense, since most taxis use a meter and charge by the minute.
+Since the p-values of the estimators are so low (at least lower than 0.025), we can reject the null hypothesis that the estimators are equal to 0 at a significance level of a = 0.05. This signifies a strong connection between length of the ride with price of the ride, which makes sense, since most taxis use a meter and charge by the minute.
 
-## Plot 2 - Box Plot
-
-## 
-
-## Plot 3 - Top 20 Taxi Companies
+## Plot 2 - Top 20 Taxi Companies
 
 #### Bar Plot
 
 This plot is a bar plot that shows us the top 20 taxi companies in Chicago.
 
 ```{r}
-company <- (taxi_data[, .(Company)])
+company <- (data[, .(Company)])
 company_counts <- (company[, .N, by = Company])
 ordered <- company_counts[order(-N)]
 top20 <- head(ordered, 20)
@@ -92,15 +88,16 @@ This plot is a line plot that shows the distance traveled by taxi vs the percent
 
 ```{r}
 indexes <- sample(1:100000, 100000)
-miles <- taxi_data$`Trip Miles`[indexes]
-fare <- taxi_data$Fare[indexes]
-tip <- taxi_data$Tips[indexes]
+miles <- data$`Trip Miles`[indexes]
+fare <- data$Fare[indexes]
+tip <- data$Tips[indexes]
 tipperc <- (tip / fare) * 100
 df <- data.frame(miles, tipperc)
 bin_width <- 0.5
 bins <- cut(
   df$miles,
-  breaks = seq(floor(min(df$miles, na.rm = TRUE)),ceiling(max(df$miles, na.rm = TRUE)),by = bin_width),
+  breaks = seq(floor(min(df$miles, na.rm = TRUE)),ceiling(max(df$miles, na.rm = TRUE)),
+    by = bin_width),
   include.lowest = TRUE,
   right = FALSE
 )
@@ -139,3 +136,89 @@ points(centers_sorted, tipbin_sorted, pch = 19, col = "blue3")
 ```
 
 This plot shows a very interesting dynamic between distance traveled and tip percentage. As you can see there is a sharp decline in percentage from 0 to 10 miles, and then a sharp increase from 11 to 15 miles and then a steady decline from there. We thought this was very interesting and hypothesized that this was due to the way that people tip. We believe that or shorter rides(0-10mi) people give a set tip not based on the fare, but on longer rides, tip is calculated by the fare.
+
+## Plot 4 - Payment Types Used
+
+#### Pie Chart
+
+This plot shows the percentage distribution of payment types used for all taxi rides.
+
+```{r}
+ride_counts <- table(data$`Payment Type`)
+ride_percentages <- prop.table(ride_counts) * 100
+sorted_counts <- sort(ride_counts, decreasing = TRUE)
+sorted_percentages <- prop.table(sorted_counts) * 100
+distinct_colors <- c("lightblue", "orange", "purple", "green", "yellow", "red", "pink")
+distinct_colors <- distinct_colors[1:length(sorted_counts)]
+pie(sorted_counts, 
+    labels = NA,  
+    col = distinct_colors, 
+    main = "Distribution of Rides by Payment Type (Percentage)")
+legend("topright",  
+       legend = paste(names(sorted_counts), ": ", round(sorted_percentages, 1), "%"),  
+       fill = distinct_colors,  
+       cex = 0.8) 
+```
+
+The pie chart shows that Credit Card payments dominate the taxi rides in Chicago, accounting for 39.7% of the total, followed by Cash payments at 28.6%. Mobile and PrCard payments collectively make up 27.3%, indicating significant usage of digital payment methods. Other categories, such as "Unknown" and "No Charge," represent much smaller percentages, highlighting the preference for more conventional payment methods like Credit Card and Cash.
+
+## Plot 5 - Distribution of trip duration
+
+#### Histogram
+
+This plot shows a histogram of frequency of different trip durations(log-scaled).
+
+```{r}
+valid_durations <- data$`Trip Seconds`[data$`Trip Seconds` > 0 & 
+  !is.na(data$`Trip Seconds`)]
+log_durations <- log1p(valid_durations)
+hist(log_durations, 
+     breaks = 100,  
+     col = "lightgreen", 
+     main = "Log Distribution of Taxi Trip Durations in Chicago", 
+     xlab = "Log(Trip Duration + 1)", 
+     ylab = "Frequency of Rides", 
+     border = "black")
+lines(density(log_durations), col = "red", lwd = 2)
+```
+
+The graph shows the log-transformed distribution of taxi trip durations in Chicago, where the x-axis represents the logarithm of trip duration in seconds (with 1 added to handle zero values). Most taxi rides fall within the range of log values between 5 and 8, which corresponds to trip durations between approximately 150 seconds (2.5 minutes) and 3000 seconds (50 minutes). This indicates that the majority of taxi rides in Chicago are relatively short, typically ranging from a few minutes to under an hour. The density curve (in red) highlights the peak in the middle of the distribution, showing that trips around 15 to 30 minutes are the most common.
+
+## Plot 6 - Trip duration at various times
+
+#### Box Plot
+
+This plot is a boxplot that shows how trip durations fluctuate at various times.
+
+```{r}
+data$trip_start_timestamp <- as.POSIXct(data$`Trip Start Timestamp`, 
+  format="%m/%d/%Y %I:%M:%S %p")
+
+data$hour <- as.numeric(format(data$trip_start_timestamp, "%I"))
+data$ampm <- format(data$trip_start_timestamp, "%p")
+
+data$hour_24 <- ifelse(data$ampm == "PM" & data$hour != 12, 
+                       data$hour + 12, 
+                       ifelse(data$ampm == "AM" & data$hour == 12, 0, data$hour))
+data$time_of_day <- ifelse(data$hour_24 >= 6 & data$hour_24 < 12, "Morning",
+                           ifelse(data$hour_24 >= 12 & data$hour_24 < 18, "Afternoon",
+                                  ifelse(data$hour_24 >= 18 & data$hour_24 < 22, "Evening",
+                                         ifelse(data$hour_24 >= 22 | data$hour_24 < 3,
+        "Late Night", "Early Morning"
+                                         ))))
+
+filtered_data <- data[data$`Trip Seconds` <= 3000]
+
+par(mar = c(7, 5, 4, 2))
+boxplot(filtered_data$`Trip Seconds` ~ filtered_data$time_of_day,
+        main = "Trip Duration (Seconds) by Time of Day (Trips Under 50 minutes)",
+        xlab = "Time of Day",
+        ylab = "Trip Duration (Seconds)",
+        col = "lightblue", 
+        las = 2,
+        cex.axis = 0.6,
+        cex.lab = 1.2,
+        cex.main = 0.8)
+```
+
+It is interesting to note that the average trip time stayed mostly the same, with trips in the afternoon and morning being slightly shorter by a few minutes. In the early morning, IQR was the smallest, which we believed was due to using taxis to go to work in the morning, which is usually not far away, especially in the city. The biggest IQRs were in the afternoon and evening, where people use taxis for both short trips, like going home, and long trips, like going out to a restaurant or bar.
