@@ -2,7 +2,7 @@
 title: "Taxicab Project"
 author: "Jack Dzialo, Tayten Bennetsen, Rith Katikaneni, Griffin Ball"
 date: '10/1/24'
-format: pdf
+format: html
 pdf: default
 html: default
 pdf-engine: pdflatex
@@ -11,6 +11,8 @@ fontsize: 10pt
 geometry: margin=1in
 toc: false 
 toc-depth: 2 
+editor_options: 
+  chunk_output_type: console
 ---
 
 # Introduction
@@ -23,7 +25,17 @@ First, let us load in the data.
 
 ```{r}
 library(data.table)
-data <- data.table(fread("~/Downloads/taxi_chicago.csv"))
+library(reshape2)
+library(ggalt)
+library(data.table)
+library(sf)
+library(ggradar)
+library(ggridges)
+library(ggplot2)
+library(ggmap)
+library(viridis)
+library(ggthemes)
+data <- data.table(fread("./taxi_chicago.csv"))
 ```
 
 ## Plot 1 - Ride Price vs Ride Time
@@ -222,3 +234,259 @@ boxplot(filtered_data$`Trip Seconds` ~ filtered_data$time_of_day,
 ```
 
 It is interesting to note that the average trip time stayed mostly the same, with trips in the afternoon and morning being slightly shorter by a few minutes. In the early morning, IQR was the smallest, which we believed was due to using taxis to go to work in the morning, which is usually not far away, especially in the city. The biggest IQRs were in the afternoon and evening, where people use taxis for both short trips, like going home, and long trips, like going out to a restaurant or bar.
+
+# New Plots
+
+## Plot 7 - Taxi Company Characteristics
+
+#### Spider Plot
+
+This plot shows, out of the top 20 taxi companies with the most rides, the 10 companies with the best and worst attributes.
+
+```{r}
+process_company <- function(df, name) {
+  indexes <- data$Company == name
+  speed <- data$`Trip Miles`[indexes] / data$`Trip Seconds`[indexes]
+  speed <- speed[!is.nan(speed) & !is.infinite(speed)] * 3600
+  quality <- data$Tips[indexes] / data$Fare[indexes]
+  quality <- quality[!is.nan(quality) & !is.infinite(quality)]
+  size <- data[indexes, .N]
+  new_row <- data.frame(
+    group = name,
+    "Avg_Distance" = mean(data$`Trip Miles`[indexes], na.rm = TRUE),
+    "Cost" = mean(data$`Trip Total`[indexes], na.rm = TRUE),
+    "Quality" = mean(quality, na.rm = TRUE),
+    "Speed" = mean(speed, na.rm = TRUE),
+    "Size" = size
+  )
+  rbind(df, new_row)
+}
+
+df <- data.frame()
+companies <- top20$Company
+for (i in 1:20) {
+  df <- process_company(df, companies[i])
+}
+group <- df$group
+df <- scale(subset(df, select = -group))
+df <- data.frame(cbind(data.frame(group), df))
+
+score = round(df$Speed + df$Quality - df$Cost + df$Size, 2)
+df$group = paste0(df$group, ", score of ", score)
+df = cbind(df, data.frame(score = score))
+df_highest = df[order(df$score, decreasing = TRUE), ]
+df_highest$group = paste0(1:20, ". ", df_highest$group)
+df_lowest = df[order(df$score), ]
+df_lowest$group = paste0(1:20, ". ", df_lowest$group)
+
+lcols <- c("#DCA236", "#5CB85C", "#46B8DA", "#FF0000", "#800080", "#FF8C00")
+library(gridExtra)
+df_filter_score <- subset(df_highest, select = -score)
+p1 <- ggradar(
+  df_filter_score[1:5, ],
+  legend.title = "Best Companies",
+  legend.position = "right",
+  grid.label.size = 3,
+  axis.label.size = 3,
+  legend.text.size = 9,
+  grid.min = -3,
+  grid.max = 3,
+  group.point.size = 4,
+  fill = TRUE,
+  fill.alpha = 0.1,
+  group.colours = lcols[1:nrow(df_filter_score[1:5, ])]
+)
+df_filter_score <- subset(df_lowest, select = -score)
+p2 <- ggradar(
+  df_filter_score[1:5, ],
+  legend.title = "Worst Companies",
+  legend.text.size = 9,
+  axis.label.size = 3,
+  grid.label.size = 3,
+  grid.min = -3,
+  grid.max = 3,
+  group.point.size = 4,
+  fill = TRUE,
+  fill.alpha = 0.1,
+  group.colours = lcols[1:5]
+)
+grid.arrange(p1,p2,nrow=2,ncol=1)
+```
+
+For each company we calculated the average distance of a ride in miles, the average total cost in dollars, average quality, average speed in miles per hour, and company size. To calculate average quality, we took the average of tip amount divided by fare amount, as a higher proportion signifies a higher satisfaction rate. For average speed, we took the average of each ride distance divided by ride time. For size, we just considered the amount of rides the company gave, since more rides given means higher driver activity. We then normalized the data to its Z-Score to better compare the different attributes. The scale of the plot is from Z = -5 to Z = 5, which accounts for essentially the entire range of values, as P(Z\<-5) is very, very small, almost 0. 50% signifies Z = 0, or the mean. To calculate score for each company, we considered what was important when ordering a taxi. We decided that a timely, low-cost, readily available, and quality ride was most important, so we added speed, quality, and size while subtracting cost. We left out ride distance because we didn't think it played an effect on ride quality, as it is chosen by the customer.
+
+Some interesting things to note are how for the companies with the highest scores, they mostly follow the same shape, with slightly lower than average cost and quality, and average speed and size. But, one company, Flash Cab, deviates from this standard by achieving a high size, high speed, and low cost model. We figured that this is due to them targeting a different niche, being cheap, easy, and quick rides, where riders were willing to sacrifice quality. The companies with the lowest scores mainly had low good attributes, with an average cost.
+
+## Plot 8 - Average Taxi Cost per Mile by Community Area in Chicago
+
+#### Geo Plot
+
+This plot shows the relationship between the average cost per mile by taxi's in each community area in Chicago.
+
+```{r}
+#cost per mile around chicago.
+data[, cost_per_mile := ifelse(`Trip Miles` > 0, `Trip Total` / `Trip Miles`, NA)]
+clean <- data[
+  !is.na(`Pickup Centroid Latitude`) &
+    !is.na(`Pickup Centroid Longitude`) &
+    !is.na(cost_per_mile) &
+    !is.na(`Pickup Community Area`)
+]
+avg_cost_per_mile <- clean[, .(
+  avg_cost_per_mile = mean(cost_per_mile, na.rm = TRUE)
+), by = `Pickup Community Area`]
+
+chicago <- st_read("./chicago")
+chicago$area_num_1 <- as.integer(chicago$area_num_1)
+
+chicago <- merge(
+  chicago,
+  avg_cost_per_mile,
+  by.x = "area_num_1",
+  by.y = "Pickup Community Area",
+  all.x = TRUE
+)
+
+chicago$avg_cost_per_mile[chicago$area_num_1 == 64] <- 32.312314
+
+chicago_simplified <- st_simplify(chicago, dTolerance = 50)
+
+ggplot(data = chicago_simplified) +
+  geom_sf(aes(fill = avg_cost_per_mile), color = "white", size = 0.2) +
+  scale_fill_viridis(
+    option = "inferno",
+    name = "Avg Cost per Mile",
+    na.value = "grey"
+  ) +
+  labs(
+    title = "Average Taxi Cost per Mile by Community Area in Chicago"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "right"
+  )
+
+```
+
+As we can see from the geo plot of Chicago, the highest cost per mile happens in the places in Chicago that are generally wealthier, according to a Chicago resident. This is interesting to see and shows us that these places are more likely to give better tips. We also saw that the highest cost per mile happens around airports, which suggests that the base fare must be higher in these areas.
+
+## Plot 9 - Trips per Hour on Each Day of the Week
+
+#### Ridgeline Plot
+
+This plot shows the relationship between days of the week and frequency of trips.
+
+```{r}
+# Ridgeline plot of number of trips per hour on different days of the week
+data[, TripStartTime := as.POSIXct(`Trip Start Timestamp`, format = "%m/%d/%Y %I:%M:%S %p")]
+
+data[, DayOfWeek := weekdays(TripStartTime)]
+data[, Hour := as.integer(format(TripStartTime, "%H"))]
+
+trip_counts <- data[, .(TripCount = .N), by = .(DayOfWeek, Hour)]
+
+day_levels <- c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+trip_counts[, DayOfWeek := factor(DayOfWeek, levels = day_levels)]
+
+ggplot(trip_counts, aes(x = Hour, y = DayOfWeek, height = TripCount, group = DayOfWeek, fill = DayOfWeek)) +
+  geom_density_ridges(stat = "identity", scale = 2, rel_min_height = 0.01, alpha = 0.7) +
+  theme_ridges(center_axis_labels = TRUE) +
+  theme(legend.position = "none") +
+  labs(
+    title = "Number of Trips per Hour on Each Day of the Week",
+    x = "Hour of Day (hr)",
+    y = "Day of the Week"
+  )
+
+```
+
+This plot shows us that during the weekdays, there is a large spike in the mornings for the amount of trips that occur. I believe that this is due to the fact that many people go to work early in the morning and thus need taxis.
+
+## Plot 10 - Trip Distance by Season
+
+This plot shows the relationship between trip distance and season of the year.
+
+#### Violin Plot
+
+```{r}
+data$trip_start_timestamp <- as.POSIXct(data$`Trip Start Timestamp`, format="%m/%d/%Y %I:%M:%S %p")
+
+data[, month := as.numeric(format(trip_start_timestamp, "%m"))]
+data[, season := ifelse(month %in% c(12, 1, 2), "Winter",
+                        ifelse(month %in% c(3, 4, 5), "Spring",
+                               ifelse(month %in% c(6, 7, 8), "Summer", "Fall")))]
+
+head(data$season)
+
+data[, hour := as.integer(format(trip_start_timestamp, "%I"))]
+
+head(data$hour)
+
+ggplot(data, aes(x = season, y = `Trip Miles`, fill = season)) +
+  geom_violin(trim = FALSE, scale = "width") +  
+  geom_boxplot(width = 0.1, color = "black", alpha = 0.6) +  
+  scale_y_log10(labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+  labs(x = "Season", y = "Trip Distance (Miles)", 
+       title = "Distribution of Trip Distance by Season (Log Scale)") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Fall" = "#E69F00", "Spring" = "#56B4E9", 
+                               "Summer" = "#009E73", "Winter" = "#F0E442"))
+```
+
+The Fall plot looks slightly different because our dataset strangely only had a very small amount of data for rides that occured in the fall. Otherwise, the seasons do not seem to have a significant impact on the trip distance, except for winter having a very slight increase in lower distance (0.1 - 1 mile) trips.
+
+## Plot 11 - Heatmap of Various Taxi Factors
+
+#### Heatmap
+
+The visualization provides a comprehensive view of how different factors in taxi rides are interrelated, with obvious trends in distance and fare but also some location-based insights that might warrant further investigation.
+
+```{r}
+numeric_cols <- data[, c("Fare", "Trip Seconds", "Trip Miles", 
+                               "Pickup Centroid Latitude", "Pickup Centroid Longitude", 
+                               "Dropoff Centroid Latitude", "Dropoff Centroid Longitude", 
+                               "Tips", "Tolls")]
+
+cor_matrix <- round(cor(numeric_cols, use = "complete.obs"), 2)  # Round to 2 decimal places
+
+cor_melt <- melt(cor_matrix)
+
+ggplot(cor_melt, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white", size = 1.5) +  
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1, 1), 
+    space = "Lab", 
+                       name = "Correlation") + 
+  geom_text(aes(label = value), color = "black", size = 4) +  
+  labs(title = "Expanded Correlation Heatmap of Taxi Dataset", x = "Variables", y = "Variables") +
+  theme_minimal() +  
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 12, hjust = 1),  
+        axis.text.y = element_text(size = 12))  
+```
+
+This heatmap reveals that as expected, there is a strong correlation between key factors like fare, trip distance, and trip duration. The role of location (pickup and dropoff coordinates) shows an interesting trend, with longitude especially having a significant inverse relationship with trip miles and fare. Tips tend to increase with fare and trip duration, but tolls remain an independent factor with no significant correlation to other variables.
+
+\newpage
+
+## Plot 12 - Average Fare and Trip Duration per Company
+
+#### Dumbell Plot
+
+Comparison of Average Fare and Trip Duration Per Company Dumbell Plot
+
+```{r}
+avg_data <- aggregate(cbind(Fare, `Trip Seconds`) ~ `Payment Type`, data = data, mean)
+
+ggplot(avg_data, aes(x = Fare, xend = `Trip Seconds` / 60, y = `Payment Type`)) +
+  geom_dumbbell(color = "blue", 
+                size = 3, colour_x = "purple",colour_xend = "red") +
+  labs(
+    title = "Comparison of Average Fare and Average Trip Duration by Payment Type",
+    x = "Fare (USD) / Trip Duration (Minutes)",
+    y = "Payment Type"
+  ) +
+  theme_minimal() +
+  theme(panel.grid.major.y = element_blank())  
+```
+
+This dumbbell plot visualizes the comparison between the average fare and average trip duration across various payment types in the dataset. The red dot represents the average fare, while the purple dot represents the average trip duration (in minutes). For payment types like No Charge and Dispute, the fare and trip duration are relatively similar, indicated by the shorter blue lines between the dots, suggesting that trips paid with these methods tend to have consistent costs and durations. In contrast, Unknown and Pcard show a larger gap between fare and trip duration, suggesting that trips using these payment methods are typically longer and more expensive. Notably, Mobile payments show relatively lower fares and trip durations, with the dots closely placed, indicating shorter trips. This plot offers valuable insights into how different payment methods correlate with trip costs and durations, potentially reflecting varying customer behaviors or trip purposes.
