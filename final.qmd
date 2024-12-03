@@ -57,6 +57,8 @@ library(viridis)
 library(ggthemes)
 library(dplyr)
 library(gridExtra)
+library(lubridate)
+library(hexbin)
 data <- data.table(fread("./merged_data.csv"))
 ```
 Before diving into specific factors that affect the rider experience, it’s essential to identify the relationships between key variables. For example, do trip distance and fare amount exhibit a strong correlation, and if so, does this relationship hold consistently across different times of day or locations? We investigate these relationships by using a correlation heatmap.
@@ -64,28 +66,94 @@ Before diving into specific factors that affect the rider experience, it’s ess
 ## Plot 1 - Heatmap
 
 ```{r fig.show = 'asis'}
+company_counts <- data %>%
+  group_by(Company) %>%
+  summarise(N = n()) %>%
+  arrange(desc(N))
+
+avg_fare <- data %>%
+  group_by(Company) %>%
+  summarise(`Total Revenue` = sum(`Trip Total`, na.rm = TRUE))
+
+avg_fare <- avg_fare[order(avg_fare$"Total Revenue", decreasing = TRUE), ]
+avg_fare
+avg_fare %>% filter(Company == "Flash Cab") %>% select("Total Revenue")
+
+
+factor(avg_fare$Avg)
+
+
+pricing_analysis <- data[
+  `Trip Miles` > 0 & !is.na(Fare) & !is.na(`Trip Miles`) & !is.na(`Trip Seconds`),
+  .(
+    price_per_mile = Fare / `Trip Miles`,
+    price_per_minute = Fare / (`Trip Seconds` / 60),
+    efficiency_score = (`Trip Miles` / (`Trip Seconds` / 3600)),
+    value_ratio = (Tips / Fare) * 100,
+    Trip_Start = mdy_hms(`Trip Start Timestamp`),
+    Fare = Fare,
+    Tips = Tips
+  )
+]
+
+# Clean and sample data
+pricing_analysis <- pricing_analysis[
+  !is.infinite(price_per_mile) &
+  !is.infinite(price_per_minute) &
+  !is.na(price_per_mile) &
+  price_per_mile < quantile(price_per_mile, 0.95, na.rm = TRUE)
+]
+
+set.seed(123)
+pricing_sample <- pricing_analysis[sample(.N, min(.N, 100000))]
+
+# Add time-based features
+pricing_sample[, ':=' (
+  hour = hour(Trip_Start),
+  day_of_week = wday(Trip_Start, label = TRUE),
+  month = month(Trip_Start, label = TRUE)
+)]
+
+pricing_sample[, time_period := fcase(
+  hour >= 5 & hour < 10, "Morning Rush (5-10)",
+  hour >= 10 & hour < 16, "Midday (10-16)",
+  hour >= 16 & hour < 20, "Evening Rush (16-20)",
+  default = "Night (20-5)"
+)]
+
+# ---- Visualization 1: Correlation Matrix ----
 numeric_cols <- data %>%
   select(Fare, Tips, Tolls, Extras, Trip_Total = `Trip Total`,
          Trip_Seconds = `Trip Seconds`, Trip_Miles = `Trip Miles`,
          `Pickup Centroid Latitude`, `Pickup Centroid Longitude`,
          `Dropoff Centroid Latitude`, `Dropoff Centroid Longitude`)
-cor_matrix <- round(cor(numeric_cols, use = "complete.obs"), 2)  # Round to 2 decimal places
-cor_melt <- reshape2::melt(cor_matrix)
-cor_melt <- cor_melt %>% filter(value != 0)
-ggplot(cor_melt, aes(Var1, Var2, fill = value)) +
-  geom_tile(color = "white", size = 0.8) +
-  scale_fill_gradient2(low = "blue", high = "red", mid = "white",
-                       midpoint = 0, limit = c(-1, 1), space = "Lab",
-                       name = "Correlation") +
-  geom_text(aes(label = ifelse(value != 0, round(value, 2), "")),
-            color = "black", size = 4) +
-  labs(title = "Enhanced Correlation Heatmap of Taxi Dataset",
-       subtitle = "Analyzing relationships between key variables",
-       x = "Variables", y = "Variables") +
+
+cor_matrix <- round(cor(numeric_cols, use = "complete.obs"), 2)
+
+p_correlation <- ggplot(reshape2::melt(cor_matrix), aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  scale_fill_gradient2(low = "#4575B4", mid = "#FFFFBF", high = "#D73027",
+                      midpoint = 0, limit = c(-1,1), name = "Correlation") +
+  geom_text(aes(label = ifelse(abs(value) > 0.1,
+                sprintf("%.2f", value), "")),
+            color = ifelse(abs(reshape2::melt(cor_matrix)$value) < 0.5, "black", "white"),
+            size = 3.5) +
+  labs(title = "Taxi Trip Variables Correlation Analysis",
+       subtitle = "Strength and direction of relationships between key metrics",
+       caption = "Only correlations > 0.1 shown for clarity",
+       x = "", y = "") +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 10, hjust = 1),
-        axis.text.y = element_text(size = 10),
-        panel.grid = element_blank())
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 9),
+    axis.text.y = element_text(size = 9),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 10, color = "grey40"),
+    panel.grid = element_blank(),
+    legend.position = "right",
+    plot.margin = unit(c(1,1,1,1), "cm")
+  )
+print(p_correlation)
+
 ```
 
 The correlation heatmap reveals key relationships that shape the rider experience, providing a foundation for understanding which factors matter most in delivering value. For example, the strong positive correlation between `Fare` and `Trip_Total` suggests that fare transparency is crucial for a seamless rider experience, as passengers often equate higher fares with higher total costs. Similarly, the positive correlation between `Trip_Miles` and `Fare` shows that longer trips tend to result in higher fares, aligning with expectations for distance-based pricing models. However, the weaker correlation between `Trip_Seconds` (duration) and fare suggests that fare pricing may not account as heavily for time as for distance. Addressing these dynamics can help taxicab companies create more consistent pricing models, balancing time and distance to avoid penalizing riders during delays and ensuring transparent cost calculations.
@@ -317,7 +385,67 @@ ggplot(tipbin, aes(x = centers, y = mean_tipperc)) +
 
 The relationship between trip distance and tipping behavior uncovers critical insights for cost-effective taxi usage. Short trips (under 10 miles) show higher percentage tips but lower absolute fares, making them ideal for downtown and inner-city travel. Medium-length journeys (11-15 miles) represent the sweet spot for both drivers and passengers, with optimal price-to-distance ratios and higher driver satisfaction through better tips. Beyond 15 miles, trips see declining tip percentages but higher absolute fares, suggesting the need for different strategies on longer journeys. For optimal results, consider scheduling longer trips during off-peak hours and negotiate flat rates in advance. For regular commutes, track your common routes and times to identify patterns in pricing and availability. Keep multiple payment methods available, and consider using company-specific apps that might offer lower rates or loyalty rewards for frequent users.
 
-## Plots 6, 7, 8, 9, 10
+## Plot 6
+
+#### Hexagonal Plot
+
+Trip Efficiency and Customer Value
+
+```{r}
+p1 <- ggplot(pricing_sample, aes(x = efficiency_score, y = price_per_mile)) +
+  geom_hex(bins = 40) +
+  scale_fill_viridis(
+    name = "Trip Count",
+    trans = "log",
+    option = "plasma"
+  ) +
+  geom_smooth(method = "gam", color = "red", size = 1.2, se = TRUE) +
+  labs(
+    title = "Trip Efficiency vs Price Analysis in Chicago Taxis",
+    subtitle = "Examining the relationship between speed and cost",
+    x = "Trip Efficiency (miles per hour)",
+    y = "Price per Mile ($)",
+    caption = "Based on sampled taxi trip data. Outliers removed for clarity."
+  ) +
+  theme_minimal(base_size = 14) +
+  xlim(0, 50) +
+  ylim(0, 20)
+print(p1)
+```
+
+The efficiency versus price analysis paints a compelling picture of how service speed affects customer perception of value. Most satisfying experiences cluster in what we might call the "sweet spot" - trips averaging 15-25 mph. This speed range represents an optimal balance between progress and safety, where customers feel they're getting good value for their money. When speeds drop below 10 mph, we see a concerning trend of higher prices per mile, likely reflecting frustrated passengers stuck in traffic or dealing with urban congestion.
+The hexagonal heatmap reveals that the majority of trips fall within this optimal range, suggesting that Chicago's taxi drivers have developed an intuitive understanding of this balance. However, the outliers tell their own story - very slow trips often correlate with lower customer satisfaction, while very high-speed trips show increased variability in both pricing and customer response.
+
+## Plot 7
+
+#### Violin Plot
+
+```{r}
+p2 <- ggplot(pricing_sample,
+             aes(x = cut(efficiency_score,
+                        breaks = c(0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50),
+                        labels = c("0-5", "5-10", "10-15", "15-20", "20-25",
+                                 "25-30", "30-35", "35-40", "40-45", "45-50")),
+                 y = value_ratio)) +
+  geom_violin(aes(fill = ..x..), trim = FALSE, alpha = 0.7) +
+  geom_boxplot(width = 0.2, fill = "white", alpha = 0.5) +
+  scale_fill_viridis_c(option = "viridis", guide = "none") +
+  labs(
+    title = "Customer Satisfaction Analysis by Trip Efficiency",
+    subtitle = "Examining tipping behavior across different speed ranges",
+    x = "Trip Efficiency Range (mph)",
+    y = "Tip Percentage (%)"
+  ) +
+  theme_minimal(base_size = 12) +
+  ylim(0, 40)
+print(p2)
+```
+
+Perhaps the most revealing indicator of customer satisfaction comes from our analysis of tipping behavior. The violin plots across different speed ranges tell an eloquent story about passenger appreciation. Trips in the 15-25 mph range consistently earn higher tip percentages, suggesting that customers recognize and reward what they perceive as "good service." This sweet spot represents a balance where passengers feel they're making steady progress without experiencing the stress of either crawling traffic or excessive speed.
+
+The wider spread of tip percentages during rush hours tells us about varying customer expectations during high-stress periods. Some passengers might be more generous, acknowledging the challenging conditions, while others express their frustration through reduced tips. This pattern suggests an opportunity for drivers to manage expectations better during peak times.
+
+## Plots 8, 9, 10, 11, 12
 
 Finally, we look at how specific situational factors impact the quality of a ride. The effects of location, time of day, and trip distance can all vary widely; for instance, trips from downtown locations might be more expensive due to higher demand, or certain times of day might see longer travel times due to traffic congestion.
 

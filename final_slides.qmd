@@ -1,0 +1,938 @@
+---
+title: "Taxicabs in Chicago"
+subtitle: "Stat 405 Final Project"
+author: "Jack Dzialo, Tayten Bennetson, Rith Katikaneni, Griffin Ball"
+server: shiny
+format:
+  revealjs:
+    include-in-header:
+      text: |
+        <style>
+        .center-xy {
+          margin: 0;
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          -ms-transform: translateY(-50%), translateX(-50%);
+          transform: translateY(-50%), translateX(-50%);
+        }
+        </style>
+    theme: ./clean.scss
+    transition: fade
+---
+
+## Introduction
+
+### Motivation
+
+```{r, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+library(data.table)
+library(shiny)
+library(grid)
+library(reshape2)
+library(ggalt)
+library(data.table)
+library(DBI)
+library(RSQLite)
+library(sf)
+library(ggradar)
+library(tidyr)
+library(ggridges)
+library(ggplot2)
+library(ggmap)
+library(viridis)
+library(ggthemes)
+library(dplyr)
+library(gridExtra)
+library(lubridate)
+library(hexbin)
+data <- data.table(fread("./merged_data.csv"))
+```
+
+
+::: {.r-fit-text}
+::: {.incremental}
+  - Urban mobility is [critical]{.bg style="--col: #D0E1F9"} to many
+  - Taxicab industry has gone through significant changes
+  - Competition with rideshare services
+:::
+:::
+
+::: {.fragment}
+::: {.text-center}
+:::{.r-fit-text}
+[Purpose]{.bg style="--col: #D0E1F9"}: Uncover insights about taxi services today
+:::
+:::
+:::
+
+## Introduction
+
+### Questions
+
+::: {.incremental}
+1. How do fare amounts vary with trip distance and duration?
+2. What factors influence tipping behavior, and how do payment types affect the likelihood and amount of tips?
+3. Are there noticeable differences in fares and tips based on the pickup location?
+4. Does the number of passengers affect the cost of a trip or the tipping behavior?
+:::
+:::{.fragment}
+We will explore a dataset, providing analysis that can help both consumers and taxicab companies to make informed decisions.
+:::
+
+## Introduction
+
+### Data Description
+
+::: {.incremental}
+  - Combined 2 different sources
+  - Many different identifiers
+    - [23]{.bg style="--col: #D0E1F9"} columns
+  - Over [6 million]{.bg style="--col: #D0E1F9"} different entries
+:::
+
+
+# Plots
+
+## Correlation Analysis
+
+### Motivation
+
+<br><br>
+
+::: {.fragment}
+::: {.text-center}
+::: {.r-fit-text}
+Need to identity relationships between [key]{.bg style="--col: #D0E1F9"} variables
+:::
+:::
+:::
+
+## Correlation Analysis
+
+### Heatmap
+
+
+::: {.r-stretch}
+```{r fig.show = 'asis'}
+company_counts <- data %>%
+  group_by(Company) %>%
+  summarise(N = n()) %>%
+  arrange(desc(N))
+
+avg_fare <- data %>%
+  group_by(Company) %>%
+  summarise(`Total Revenue` = sum(`Trip Total`, na.rm = TRUE))
+
+avg_fare <- avg_fare[order(avg_fare$"Total Revenue", decreasing = TRUE), ]
+
+
+pricing_analysis <- data[
+  `Trip Miles` > 0 & !is.na(Fare) & !is.na(`Trip Miles`) & !is.na(`Trip Seconds`),
+  .(
+    price_per_mile = Fare / `Trip Miles`,
+    price_per_minute = Fare / (`Trip Seconds` / 60),
+    efficiency_score = (`Trip Miles` / (`Trip Seconds` / 3600)),
+    value_ratio = (Tips / Fare) * 100,
+    Trip_Start = mdy_hms(`Trip Start Timestamp`),
+    Fare = Fare,
+    Tips = Tips
+  )
+]
+
+# Clean and sample data
+pricing_analysis <- pricing_analysis[
+  !is.infinite(price_per_mile) &
+  !is.infinite(price_per_minute) &
+  !is.na(price_per_mile) &
+  price_per_mile < quantile(price_per_mile, 0.95, na.rm = TRUE)
+]
+
+set.seed(123)
+pricing_sample <- pricing_analysis[sample(.N, min(.N, 100000))]
+
+# Add time-based features
+pricing_sample[, ':=' (
+  hour = hour(Trip_Start),
+  day_of_week = wday(Trip_Start, label = TRUE),
+  month = month(Trip_Start, label = TRUE)
+)]
+
+pricing_sample[, time_period := fcase(
+  hour >= 5 & hour < 10, "Morning Rush (5-10)",
+  hour >= 10 & hour < 16, "Midday (10-16)",
+  hour >= 16 & hour < 20, "Evening Rush (16-20)",
+  default = "Night (20-5)"
+)]
+
+# ---- Visualization 1: Correlation Matrix ----
+numeric_cols <- data %>%
+  select(Fare, Tips, Tolls, Extras, Trip_Total = `Trip Total`,
+         Trip_Seconds = `Trip Seconds`, Trip_Miles = `Trip Miles`,
+         `Pickup Centroid Latitude`, `Pickup Centroid Longitude`,
+         `Dropoff Centroid Latitude`, `Dropoff Centroid Longitude`)
+
+cor_matrix <- round(cor(numeric_cols, use = "complete.obs"), 2)
+
+p_correlation <- ggplot(reshape2::melt(cor_matrix), aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  scale_fill_gradient2(low = "#4575B4", mid = "#FFFFBF", high = "#D73027",
+                      midpoint = 0, limit = c(-1,1), name = "Correlation") +
+  geom_text(aes(label = ifelse(abs(value) > 0.1,
+                sprintf("%.2f", value), "")),
+            color = ifelse(abs(reshape2::melt(cor_matrix)$value) < 0.5, "black", "white"),
+            size = 3.5) +
+  labs(title = "Taxi Trip Variables Correlation Analysis",
+       subtitle = "Strength and direction of relationships between key metrics",
+       caption = "Only correlations > 0.1 shown for clarity",
+       x = "", y = "") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 9),
+    axis.text.y = element_text(size = 9),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 10, color = "grey40"),
+    panel.grid = element_blank(),
+    legend.position = "right",
+    plot.margin = unit(c(1,1,1,1), "cm")
+  )
+print(p_correlation)
+```
+:::
+
+## Company Attributes
+
+### Motivation
+
+<br><br>
+
+::: {.fragment}
+::: {.text-center}
+::: {.r-fit-text}
+[Challenge]{.bg style="--col: #D0E1F9"}: How to differentiate between different companies?
+:::
+:::
+:::
+
+## Company Attributes
+
+### Spider Plot
+
+:::{.r-stretch}
+```{r}
+company_counts <- data %>%
+  group_by(Company) %>%
+  summarise(N = n()) %>%
+  arrange(desc(N))
+
+top20 <- company_counts %>% head(20)
+
+process_company <- function(df, name) {
+  indexes <- data$Company == name
+  speed <- data$`Trip Miles`[indexes] / data$`Trip Seconds`[indexes]
+  speed <- speed[!is.nan(speed) & !is.infinite(speed)] * 3600
+  quality <- data$Tips[indexes] / data$Fare[indexes]
+  quality <- quality[!is.nan(quality) & !is.infinite(quality)]
+  size <- data[indexes, .N]
+  new_row <- data.frame(
+    group = name,
+    "Distance" = mean(data$`Trip Miles`[indexes], na.rm = TRUE),
+    "Cost" = mean(data$`Trip Total`[indexes], na.rm = TRUE),
+    "Quality" = mean(quality, na.rm = TRUE),
+    "Speed" = mean(speed, na.rm = TRUE),
+    "Size" = size
+  )
+  rbind(df, new_row)
+}
+
+df <- data.frame()
+company <- (data[, .(Company)])
+company_counts <- (company[, .N, by = Company])
+ordered <- company_counts[order(-N)]
+top20 <- head(ordered, 20)
+names <- top20$Company
+counts <- top20$N
+
+companies <- top20$Company
+for (i in 1:20) {
+  df <- process_company(df, companies[i])
+}
+group <- df$group
+df <- scale(subset(df, select = -group))
+df <- data.frame(cbind(data.frame(group), df))
+
+score <- round(df$Speed + df$Quality - df$Cost + df$Size, 2)
+df$group <- paste0(df$group, ", score of ", score)
+df <- cbind(df, data.frame(score = score))
+df_highest <- df[order(df$score, decreasing = TRUE), ]
+df_highest$group <- paste0(1:20, ". ", df_highest$group)
+df_lowest <- df[order(df$score), ]
+df_lowest$group <- paste0(1:20, ". ", df_lowest$group)
+
+lcols <- c("#DCA236", "#5CB85C", "#46B8DA", "#FF0000", "#800080", "#FF8C00")
+df_filter_score <- subset(df_highest, select = -score)
+p1 <- ggradar(
+  df_filter_score[1:5, ],
+  legend.title = "Best Companies",
+  legend.position = "right",
+  grid.label.size = 3,
+  axis.label.size = 3,
+  legend.text.size = 9,
+  grid.min = -3,
+  grid.max = 3,
+  fill = TRUE,
+  fill.alpha = 0.1,
+  group.colours = lcols[1:nrow(df_filter_score[1:5, ])],
+  group.point.size = 1,
+  group.line.width = 0.6
+)
+df_filter_score <- subset(df_lowest, select = -score)
+p2 <- ggradar(
+  df_filter_score[1:5, ],
+  legend.title = "Worst Companies",
+  legend.text.size = 9,
+  axis.label.size = 3,
+  grid.label.size = 3,
+  grid.min = -3,
+  grid.max = 3,
+  fill = TRUE,
+  fill.alpha = 0.1,
+  group.colours = lcols[1:5],
+  group.point.size = 1,
+  group.line.width = 0.6
+)
+grid.arrange(p1,p2,nrow=2,ncol=1)
+```
+:::
+
+
+## Fare Consistency
+
+### Motivation
+
+
+<br><br>
+
+::: {.fragment}
+::: {.text-center}
+::: {.r-fit-text}
+Need to identity relationships between [key]{.bg style="--col: #D0E1F9"} variables
+:::
+:::
+:::
+
+
+## Fare Consistency {.nostretch .scrollable}
+
+### Scatterplot
+
+```{r fig.height=18}
+analysis <- function(company) {
+  filtered <- data[data$Company == company]
+  indexes <- sample(1:nrow(filtered), 1000)
+  ride_time <- filtered$`Trip Seconds`[indexes]
+  ride_price <- filtered$Fare[indexes]
+  ride_distance <- filtered$`Trip Miles`[indexes]
+  outliers1 <- which(ride_price <= quantile(ride_price, .97, na.rm = TRUE))
+  outliers2 <- which(ride_time <= quantile(ride_time, .97, na.rm = TRUE))
+  outliers3 <- which(ride_distance <= quantile(ride_distance, .97, na.rm = TRUE))
+  threshold <- Reduce(intersect, list(outliers1, outliers2, outliers3))
+  df <- data.frame(ride_time = ride_time[threshold],
+                   ride_price = ride_price[threshold],
+                   ride_distance = ride_distance[threshold])
+  model <- lm(ride_price ~ ride_time, df)
+  r_squared <- summary(model)$r.squared
+  mvmodel <- lm(ride_price ~ ride_time * ride_distance, data = df)
+  mv_r_squared <- summary(mvmodel)$r.squared
+  predicted_prices <- predict(mvmodel, newdata = data.frame(ride_time, ride_distance))
+  newmodel_line <- lm(predicted_prices ~ ride_time)
+  p <- ggplot(df, aes(x = ride_time, y = ride_price)) +
+    geom_point(size = 0.5) +
+    geom_smooth(method = "lm", color = "red", se = FALSE) +
+    labs(x = "Ride Time (Seconds)", y = "Ride Fare (Dollars)", title = paste0("Fare vs Ride Time (", company, ")")) +
+    annotate("text", x = Inf, y = -Inf, label = paste("R squared = ", round(r_squared, 2)),
+             hjust = 1.1, vjust = -3, size = 6, color = "black") +
+    annotate("text", x = Inf, y = -Inf, label = paste("MV R squared = ", round(mv_r_squared, 2)),
+             hjust = 1.1, vjust = -1.5, size = 6, color = "black") + theme_minimal()
+  return(list(p))
+}
+a1 <- analysis('Sun Taxi')
+a2 <- analysis('Flash Cab')
+a3 <- analysis('Taxicab Insurance Agency Llc')
+graphs <- cbind(a1[1],a2[1],a3[1])
+grid.arrange(grobs = graphs)
+```
+
+## Tip Percentage Analysis
+
+### Motivation
+
+<br><br>
+
+::: {.fragment}
+::: {.text-center}
+::: {.r-fit-text}
+Understand how consumers value [distance]{.bg style="--col: #D0E1F9"}
+:::
+:::
+:::
+
+
+## Tip Percentage Analysis
+
+### Line Plot
+
+```{r}
+set.seed(123)
+sampled_data <- data %>% sample_n(100000)
+
+sampled_data <- sampled_data %>%
+  mutate(
+    miles = `Trip Miles`,
+    fare = Fare,
+    tip = Tips,
+    tipperc = (Tips / Fare) * 100
+  )
+
+bin_width <- 0.5
+breaks <- seq(floor(min(sampled_data$miles, na.rm = TRUE)),
+              ceiling(max(sampled_data$miles, na.rm = TRUE)),
+              by = bin_width)
+
+sampled_data <- sampled_data %>%
+  mutate(
+    mile_bin = cut(miles,
+                   breaks = breaks,
+                   include.lowest = TRUE,
+                   right = FALSE)
+  )
+
+tipbin <- sampled_data %>%
+  group_by(mile_bin) %>%
+  summarise(mean_tipperc = mean(tipperc, na.rm = TRUE))
+
+tipbin <- tipbin %>%
+  mutate(
+    centers = sapply(strsplit(gsub("\\[|\\)|\\]", "", mile_bin), ","), function(x) {
+      lower_bound <- as.numeric(x[1])
+      lower_bound + (bin_width / 2)
+    })
+  )
+
+ggplot(tipbin, aes(x = centers, y = mean_tipperc)) +
+  geom_line(color = "blue3", size = 1) +
+  geom_point(color = "blue3") +
+  labs(
+    title = "Distance vs Tip Percentage",
+    x = "Distance (Miles)",
+    y = "Tip Percentage (%)"
+  ) +
+  xlim(0, 30) +
+  ylim(0, 25) +
+  theme_minimal() +
+  theme(panel.grid.major = element_line(color = "grey80"))
+
+```
+
+## Average Taxi Cost by Location
+
+### Motivation
+
+<br><br>
+
+::: {.text-center}
+::: {.r-fit-text}
+  - Demographics and location may play an effect on price
+:::
+:::
+
+
+## Average Taxi Cost by Location
+
+### Geo Plot
+
+```{r}
+
+#cost per mile around chicago.
+data[, cost_per_mile := ifelse(`Trip Miles` > 0, `Trip Total` / `Trip Miles`, NA)]
+clean <- data[
+  !is.na(`Pickup Centroid Latitude`) &
+    !is.na(`Pickup Centroid Longitude`) &
+    !is.na(cost_per_mile) &
+    !is.na(`Pickup Community Area`)
+]
+avg_cost_per_mile <- clean[, .(
+  avg_cost_per_mile = mean(cost_per_mile, na.rm = TRUE)
+), by = `Pickup Community Area`]
+
+chicago <- st_read("./chicago", quiet = TRUE)
+chicago$area_num_1 <- as.integer(chicago$area_num_1)
+
+chicago <- merge(
+  chicago,
+  avg_cost_per_mile,
+  by.x = "area_num_1",
+  by.y = "Pickup Community Area",
+  all.x = TRUE
+)
+
+chicago$avg_cost_per_mile[chicago$area_num_1 == 64] <- 32.312314
+
+chicago_simplified <- st_simplify(chicago, dTolerance = 50)
+
+ggplot(data = chicago_simplified) +
+  geom_sf(aes(fill = avg_cost_per_mile), color = "white", size = 0.2) +
+  scale_fill_viridis(
+    option = "inferno",
+    name = "Avg Cost per Mile",
+    na.value = "grey"
+  ) +
+  labs(
+    title = "Average Taxi Cost per Mile by Community Area in Chicago"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "right"
+  )
+```
+
+## Trip Efficiency and Price
+
+### Motivation
+
+<br><br>
+
+::: {.text-center}
+::: {.r-fit-text}
+::: {.incremental}
+  - Possible other factors that affect perceived value
+  - How does [Trip Efficiency]{.bg style="--col: #D0E1F9"} affect price?
+:::
+:::
+:::
+
+## Trip Efficiency and Price
+
+### Hex Plot
+
+```{r}
+p1 <- ggplot(pricing_sample, aes(x = efficiency_score, y = price_per_mile)) +
+  geom_hex(bins = 40) +
+  scale_fill_viridis(
+    name = "Trip Count",
+    trans = "log",
+    option = "plasma"
+  ) +
+  geom_smooth(method = "gam", color = "red", size = 1.2, se = TRUE) +
+  labs(
+    title = "Trip Efficiency vs Price Analysis in Chicago Taxis",
+    subtitle = "Examining the relationship between speed and cost",
+    x = "Trip Efficiency (miles per hour)",
+    y = "Price per Mile ($)",
+    caption = "Based on sampled taxi trip data. Outliers removed for clarity."
+  ) +
+  theme_minimal(base_size = 14) +
+  xlim(0, 50) +
+  ylim(0, 20)
+print(p1)
+
+```
+
+## Trips and Temperature
+
+### Motivation
+
+<br><br>
+
+::: {.fragment}
+::: {.text-center}
+::: {.r-fit-text}
+[Weather]{.bg style="--col: #D0E1F9"} play a significant effect
+:::
+:::
+:::
+
+## Trips and Temperature
+
+### Line Plot
+
+```{r}
+
+conn <- dbConnect(SQLite(), "./taxi_trips.db")
+
+
+# Disconnect from the database
+query_weather_data <- "
+SELECT datetime, feelslike
+FROM weather_data
+WHERE conditions IS NOT NULL;
+"
+weather_data <- dbGetQuery(conn, query_weather_data)
+weather_data$datetime <- as.Date(weather_data$datetime)
+#head(weather_data)
+
+#my query cuz my tables are different somehow pretty sure your query is below
+query_taxi_trips_per_day <- "
+SELECT date(substr(\"Trip Start Timestamp\", 7, 4) || '-' ||
+            substr(\"Trip Start Timestamp\", 1, 2) || '-' ||
+            substr(\"Trip Start Timestamp\", 4, 2)) AS date,
+       COUNT(*) AS trip_count
+FROM taxi_trips
+WHERE \"Trip Start Timestamp\" IS NOT NULL
+GROUP BY date
+ORDER BY date;
+"
+
+#query_taxi_trips_per_day <- "
+#SELECT date(trip_start_timestamp) AS date, COUNT(*) AS trip_count
+#FROM taxi_trips
+#GROUP BY date;
+#"
+
+taxi_trips_per_day <- dbGetQuery(conn, query_taxi_trips_per_day)
+#head(taxi_trips_per_day)
+
+merged_data <- merge(weather_data, taxi_trips_per_day, by.x = "datetime", by.y = "date")
+#head(merged_data)
+
+
+merged_data_long <- merged_data %>%
+  pivot_longer(cols = c(trip_count, feelslike),
+               names_to = "variable",
+               values_to = "value")
+
+weekly_data <- merged_data %>%
+  mutate(week = floor_date(datetime, unit = "week")) %>%
+  group_by(week) %>%
+  summarize(
+    avg_trip_count = mean(trip_count, na.rm = TRUE),
+    avg_feelslike = 9/5*mean(feelslike, na.rm = TRUE)+32
+  )
+
+
+ggplot() +
+  geom_line(data = weekly_data, aes(x = week, y = avg_trip_count, color = "Trip Count")) +
+  geom_line(data = weekly_data, aes(x = week, y = avg_feelslike  * 300, color = "Feels Like Temperature")) + # Adjust scale
+
+  scale_y_continuous(
+    name = "Trip Count",
+    sec.axis = sec_axis(~ . / 300, name = "Feels Like Temperature (°F)")
+  ) +
+  labs(title = "Weekly Taxi Trips and Feels Like Temperature",
+       x = "Week",
+       color = "Variable") +
+  theme_minimal()
+```
+
+
+## Trip Frequency vs Day of the Week
+
+### Motivation
+
+<br><br>
+
+::: {.fragment}
+::: {.text-center}
+::: {.r-fit-text}
+How does the day of the week affect [Trip Frequency]{.bg style="--col: #D0E1F9"}?
+:::
+:::
+:::
+
+## Trip Frequency vs Day of the Week
+
+### Ridgeline Plot
+
+```{r}
+
+# Ridgeline plot of number of trips per hour on different days of the week
+data[, TripStartTime := as.POSIXct(`Trip Start Timestamp`, format = "%m/%d/%Y %I:%M:%S %p")]
+
+data[, DayOfWeek := weekdays(TripStartTime)]
+data[, Hour := as.integer(format(TripStartTime, "%H"))]
+
+trip_counts <- data[, .(TripCount = .N), by = .(DayOfWeek, Hour)]
+
+day_levels <- c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+trip_counts[, DayOfWeek := factor(DayOfWeek, levels = day_levels)]
+
+ggplot(trip_counts, aes(x = Hour, y = DayOfWeek, height = TripCount, group = DayOfWeek, fill = DayOfWeek)) +
+  geom_density_ridges(stat = "identity", scale = 2, rel_min_height = 0.01, alpha = 0.7) +
+  theme_ridges(center_axis_labels = TRUE) +
+  theme(legend.position = "none") +
+  labs(
+    title = "Number of Trips per Hour on Each Day of the Week",
+    x = "Hour of Day (hr)",
+    y = "Day of the Week"
+  )
+
+```
+
+## Killer Plot
+
+```{r}
+calculate_stats <- function(data, time_type = "hour") {
+    if(time_type == "hour") {
+        get_hour <- function(timestamp) {
+            parts <- strsplit(timestamp, " ")
+            time_parts <- sapply(parts, function(x) {
+                time <- x[2]
+                ampm <- x[3]
+                hour <- as.numeric(strsplit(time, ":")[[1]][1])
+                if(ampm == "PM" && hour < 12) hour <- hour + 12
+                if(ampm == "AM" && hour == 12) hour <- 0
+                return(hour)
+            })
+            return(time_parts)
+        }
+
+        hours <- get_hour(data$`Trip Start Timestamp`)
+        stats <- data.frame(time = 0:23)
+        for(h in 0:23) {
+            time_data <- data[hours == h, ]
+            stats$fare[h + 1] <- mean(time_data$Fare, na.rm = TRUE)
+            stats$tips[h + 1] <- mean(time_data$Tips, na.rm = TRUE)
+            stats$distance[h + 1] <- mean(time_data$`Trip Miles`, na.rm = TRUE)
+            stats$trips[h + 1] <- nrow(time_data)
+        }
+    } else {
+        get_month <- function(timestamp) {
+            as.numeric(substr(timestamp, 1, 2))
+        }
+
+        months <- get_month(data$`Trip Start Timestamp`)
+        stats <- data.frame(time = 1:12)
+        for(m in 1:12) {
+            time_data <- data[months == m, ]
+            stats$fare[m] <- mean(time_data$Fare, na.rm = TRUE)
+            stats$tips[m] <- mean(time_data$Tips, na.rm = TRUE)
+            stats$distance[m] <- mean(time_data$`Trip Miles`, na.rm = TRUE)
+            stats$trips[m] <- nrow(time_data)
+        }
+    }
+    return(stats)
+}
+
+create_taxi_clock <- function(stats, metric = "fare", time_type = "hour") {
+    if(time_type == "hour") {
+        n_segments <- 24
+        angle_per_segment <- 360/n_segments
+        period_config <- list(
+            night1 = list(start = 0, end = 4, color = "#2C3E50"),
+            morning = list(start = 4, end = 8, color = "#E67E22"),
+            day = list(start = 8, end = 16, color = "#3498DB"),
+            evening = list(start = 16, end = 20, color = "#9B59B6"),
+            night2 = list(start = 20, end = 24, color = "#2C3E50")
+        )
+    } else {
+        n_segments <- 12
+        angle_per_segment <- 360/n_segments
+    }
+
+    grid.newpage()
+    pushViewport(viewport(x = 0.5, y = 0.45, width = 0.9, height = 0.9))
+
+
+    for(r in seq(0.1, 0.4, by = 0.05)) {
+        grid.circle(x = 0.5, y = 0.5, r = r,
+                   gp = gpar(fill = NA, col = "gray90", lty = "dotted"))
+    }
+
+
+    if(time_type == "hour") {
+        for(period in period_config) {
+            start_angle <- (period$start * angle_per_segment - 90) * pi/180
+            end_angle <- (period$end * angle_per_segment - 90) * pi/180
+            angles <- seq(start_angle, end_angle, length.out = 50)
+            x_outer <- 0.5 + cos(angles) * 0.42
+            y_outer <- 0.5 + sin(angles) * 0.42
+            grid.lines(x = x_outer, y = y_outer,
+                      gp = gpar(col = period$color, lwd = 3))
+        }
+    } else {
+
+        grid.circle(x = 0.5, y = 0.5, r = 0.42,
+                   gp = gpar(fill = NA, col = "gray90", lwd = 3))
+    }
+
+    values <- switch(metric,
+                    "fare" = stats$fare,
+                    "tips" = stats$tips,
+                    "distance" = stats$distance,
+                    "trips" = stats$trips)
+    max_val <- max(values, na.rm = TRUE)
+
+
+    for(i in 1:n_segments) {
+        start_angle <- ((i-1) * angle_per_segment - 90) * pi/180
+        end_angle <- (i * angle_per_segment - 90) * pi/180
+        mid_angle <- (start_angle + end_angle)/2
+
+        value <- values[i]
+        norm_height <- (value/max_val) * 0.3
+
+
+        if(time_type == "hour") {
+            if(i-1 >= 0 && i-1 < 4) color <- "#2C3E50"
+            else if(i-1 >= 4 && i-1 < 8) color <- "#E67E22"
+            else if(i-1 >= 8 && i-1 < 16) color <- "#3498DB"
+            else if(i-1 >= 16 && i-1 < 20) color <- "#9B59B6"
+            else color <- "#2C3E50"
+        } else {
+
+            if(i >= 12 || i <= 2) color <- "#2C3E50"      # Winter
+            else if(i >= 3 && i <= 5) color <- "#27AE60"  # Spring
+            else if(i >= 6 && i <= 8) color <- "#E67E22"  # Summer
+            else color <- "#9B59B6"                       # Fall
+        }
+
+        x_start <- 0.5 + cos(mid_angle) * 0.1
+        y_start <- 0.5 + sin(mid_angle) * 0.1
+        x_end <- 0.5 + cos(mid_angle) * (0.1 + norm_height)
+        y_end <- 0.5 + sin(mid_angle) * (0.1 + norm_height)
+
+        grid.lines(x = c(x_start, x_end), y = c(y_start, y_end),
+                  gp = gpar(col = color, lwd = 8, alpha = 0.7))
+
+
+        label <- if(time_type == "hour") {
+            sprintf("%02d:00", i-1)
+        } else {
+            month.abb[i]
+        }
+
+        label_angle <- mid_angle * 180/pi
+        if(label_angle > 90 && label_angle < 270) {
+            label_angle <- label_angle + 180
+        }
+
+        grid.text(label,
+                 x = 0.5 + cos(mid_angle) * 0.45,
+                 y = 0.5 + sin(mid_angle) * 0.45,
+                 gp = gpar(fontsize = 8),
+                 rot = label_angle)
+    }
+
+    if(time_type == "hour") {
+        grid.text("Day\n(08-16)",
+                 x = 0.5, y = 0.95,
+                 gp = gpar(fontsize = 10, fontface = "bold"))
+        grid.text("Morning\n(04-08)",
+                 x = 0.95, y = 0.5,
+                 gp = gpar(fontsize = 10, fontface = "bold"))
+        grid.text("Evening\n(16-20)",
+                 x = 0.05, y = 0.5,
+                 gp = gpar(fontsize = 10, fontface = "bold"))
+        grid.text("Night\n(00-04)",
+                 x = 0.5, y = 0.05,
+                 gp = gpar(fontsize = 10, fontface = "bold"))
+    }
+
+
+    metric_labels <- c(
+        fare = "Average Fare ($)",
+        tips = "Average Tips ($)",
+        distance = "Average Distance (miles)",
+        trips = "Number of Trips"
+    )
+
+    grid.text(metric_labels[metric],
+             x = 0.5, y = 0.53,
+             gp = gpar(fontface = "bold", fontsize = 12))
+
+    range_text <- sprintf("Range: %.1f - %.1f",
+                         min(values, na.rm = TRUE),
+                         max(values, na.rm = TRUE))
+
+    grid.text(range_text,
+             x = 0.5, y = 0.47,
+             gp = gpar(fontsize = 10))
+
+    popViewport()
+    time_text <- if(time_type == "hour") {
+        "24-Hour Taxi Service Pattern"
+    } else {
+        "Monthly Taxi Service Pattern"
+    }
+
+    grid.text(time_text,
+             x = 0.5, y = 0.95,
+             gp = gpar(fontface = "bold", fontsize = 16))
+}
+
+ui <- fluidPage(
+    titlePanel("Taxi Service Pattern Analysis"),
+
+    sidebarLayout(
+        sidebarPanel(
+            selectInput("time_type", "Select Time Scale:",
+                       choices = c(
+                           "24-Hour View" = "hour",
+                           "Monthly View" = "month"
+                       )),
+
+            selectInput("metric", "Select Metric to Display:",
+                       choices = c(
+                           "Average Fare" = "fare",
+                           "Average Tips" = "tips",
+                           "Average Distance" = "distance",
+                           "Number of Trips" = "trips"
+                       )),
+
+            hr(),
+
+            conditionalPanel(
+                condition = "input.time_type == 'hour'",
+                h4("24-Hour Time Periods"),
+                div(style = "color: #2C3E50;", "Night (00:00-04:00 & 20:00-24:00)"),
+                div(style = "color: #E67E22;", "Morning (04:00-08:00)"),
+                div(style = "color: #3498DB;", "Day (08:00-16:00)"),
+                div(style = "color: #9B59B6;", "Evening (16:00-20:00)")
+            ),
+
+            conditionalPanel(
+                condition = "input.time_type == 'month'",
+                h4("Seasonal Periods"),
+                div(style = "color: #2C3E50;", "Winter (Dec-Feb)"),
+                div(style = "color: #27AE60;", "Spring (Mar-May)"),
+                div(style = "color: #E67E22;", "Summer (Jun-Aug)"),
+                div(style = "color: #9B59B6;", "Fall (Sep-Nov)")
+            )
+        ),
+
+        mainPanel(
+            plotOutput("clockPlot", height = "800px")
+        )
+    )
+)
+
+server <- function(input, output, session) {
+    filtered_stats <- reactive({
+        calculate_stats(data, input$time_type)
+    })
+
+    output$clockPlot <- renderPlot({
+        create_taxi_clock(
+            filtered_stats(),
+            input$metric,
+            input$time_type
+        )
+    })
+}
+
+#shinyApp(ui = ui, server = server)
+```
+
+Link to Killer plot: [Here](http://127.0.0.1:5812/){.external target="_blank"}
+
+## Conclusion
+
+::: {.incremental}
+  - Many different things factor into customer satisfaction
+  - Companies should focus on
+    - Transparent pricing
+    - Maintaining ideal trip speed
+    - Targeting high value areas
+  - Valuable analysis for future changes
+:::
